@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  EC2AdminUserParams:
+    Type: String
+    Default: EC2-Admin
+    Description: Please enter username for EC2-Admin user.
+    AllowedPattern: '[A-Za-z0-9\-]+'
+  EC2AdminPassword:
+    Type: String
+    NoEcho: true
+    Default: Aa123456
+    AllowedPattern: ^(?=.*[A-Z]).{8,}$
+    Description: Password must be at least 8 characters and contain 1 uppercase letter.
+  EC2SupportUserParams:
+    Type: String
+    Default: EC2-Support
+    Description: Please enter username for EC2-Support user.
+    AllowedPattern: '[A-Za-z0-9\-]+'
+  EC2SupportPassword:
+    Type: String
+    NoEcho: true
+    Default: Aa123456
+    AllowedPattern: ^(?=.*[A-Z]).{8,}$
+    Description: Password must be at least 8 characters and contain 1 uppercase letter.
+  S3SupportUserParams:
+    Type: String
+    Default: S3-Support
+    Description: Please enter username for S3-Support user.
+    AllowedPattern: '[A-Za-z0-9\-]+'
+  S3SupportPassword:
+    Type: String
+    NoEcho: true
+    Default: Aa123456
+    AllowedPattern: ^(?=.*[A-Z]).{8,}$
+    Description: Password must be at least 8 characters and contain 1 uppercase letter.
+  EC2SupportGroupParams:
+    Type: String
+    Default: EC2-Support-Group
+    AllowedPattern: '[A-Za-z0-9\-]+'
+    Description: Please enter name for EC2-Support group.
+Resources:
+  EC2AdminPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: EC2-StartStopDesc-Policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:StartInstances
+              - ec2:StopInstances
+              - ec2:DescribeInstances
+              - iam:ChangePassword
+            Resource: '*'
+      Groups:
+        - !Ref EC2AdminGroup
+  EC2SupportPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: EC2-Desc-Policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+              - iam:ChangePassword
+            Resource: '*'
+      Groups:
+        - !Ref EC2SupportGroup
+  EC2AdminGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: EC2-Admins-Group
+  EC2SupportGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Ref EC2SupportGroupParams
+  S3SupportGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: S3-Support-Group
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/IAMUserChangePassword
+  EC2AdminUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${EC2AdminUserParams}@devsecops.bar-ilan
+      LoginProfile:
+        Password: !Ref EC2AdminPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref EC2AdminGroup
+  EC2SupportUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref EC2SupportUserParams
+      LoginProfile:
+        Password: !Ref EC2SupportPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref EC2SupportGroup
+  S3SupportUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref S3SupportUserParams
+      LoginProfile:
+        Password: !Ref S3SupportPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref S3SupportGroup

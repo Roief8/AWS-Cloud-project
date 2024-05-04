@@ -38,5 +38,10 @@ automated and timed backup for ec2 instances to private s3 bucket using lambdas.
 
 ![EC2](https://github.com/Roief8/AWS-Cloud-project/assets/105589810/9f3101a7-6542-47ea-b2d0-f6df827ae1a4)
 
+#### IAM:
+
+![IAM - designer](https://github.com/Roief8/AWS-Cloud-project/assets/105589810/1f10ee42-3b2b-4a25-ad7c-14f6c85131cb)
+
+
 
 

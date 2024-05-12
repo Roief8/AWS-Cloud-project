@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Create 2 EC2 instances - Docker and Dev, and public ASG Instances with ALB on selected VPC"
+
+Parameters:
+  DevSubnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: Choose the subnet for the Dev instance
+
+  DockerSubnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: Choose the subnet for the Docker instance
+
+  ASGSubnets:
+    Type: "List<AWS::EC2::Subnet::Id>"
+    Description: Choose public subnets for the ASG instances
+
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: Choose the instance type
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+
+  DevInstanceName:
+    Type: String
+    Default: Dev
+    Description: name of Dev instanecS
+
+  DockerInstanceName:
+    Type: String
+    Default: Docker
+    Description: name of Docker instance
+
+  SecurityGroupID:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: private subnet secruity group
+
+  ASGSecurityGroupID:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: ASG Security group
+
+  IAMRole:
+    Type: String
+    Default: "EC2-S3"
+    ConstraintDescription: "Must be a valid IAM Role"
+    Description: IAM role to attach
+
+  KeyPair:
+    Type: "AWS::EC2::KeyPair::KeyName"
+    Description: Choose the Keypair
+
+  BucketName:
+    Type: String
+    Default: "s3-roi-prod"
+    Description: Name of S3 Bucket to upload test file
+
+Mappings:
+  UserDataMap:
+    WebServer:
+      UserData: |
+        #!/bin/bash
+        yum update -y
+        yum install stress -y
+        yum install httpd -y
+        systemctl start httpd
+        systemctl enable httpd
+        echo "<h1>Hello World from $(hostname -f)</h1>" > /var/www/html/index.html
+
+    DockerFile:
+      UserData: |
+        #!/bin/bash
+        sudo yum update -y
+        sudo yum install -y docker
+        sudo service docker start
+        sudo systemctl enable docker
+
+        echo "FROM public.ecr.aws/amazonlinux/amazonlinux:latest
+        # Install dependencies
+        RUN yum update -y && \
+        yum install -y httpd
+
+        # Install apache and write hello world message
+        RUN echo 'Hello World From My First Container!' > /var/www/html/index.html
+
+        # Configure apache
+        RUN echo 'mkdir -p /var/run/httpd' >> /root/run_apache.sh && \
+        echo 'mkdir -p /var/lock/httpd' >> /root/run_apache.sh && \
+        echo '/usr/sbin/httpd -D FOREGROUND' >> /root/run_apache.sh && \
+        chmod 755 /root/run_apache.sh
+
+        EXPOSE 80
+
+        CMD /root/run_apache.sh" > /home/ec2-user/Dockerfile
+        sudo docker build -t hello-world .
+        sudo docker run -t -i -p 80:80 hello-world
+
+Resources:
+  ## ---- EC2 Instances ---- ##
+
+  DevInstance: # Create text file on created S3 bucket.
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-051f8a213df8bc089
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPair
+      VpcId: !ImportValue VPC
+      SubnetId: !Ref DevSubnet
+      SecurityGroupIds:
+        - !Ref SecurityGroupID
+      IamInstanceProfile: !Ref IAMRole
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            # Create simple text file
+            echo "test file from ${InstanceName}!" > /home/ec2-user/test-file.txt
+            # Create S3 Bucket
+            aws s3 mb s3://${BucketName}
+            # Move the text file to the S3 bucket
+            aws s3 mv /home/ec2-user/test-file.txt s3://${BucketName}/test-file.txt
+          - InstanceName: !Ref DevInstanceName
+            BucketName: !Ref BucketName
+      Tags:
+        - Key: Name
+          Value: !Ref DevInstanceName
+
+  DockerInstance: # install and run Docker file.
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-051f8a213df8bc089
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPair
+      VpcId: !ImportValue VPC
+      SubnetId: !Ref DockerSubnet # todo - Importvalue subnet
+      SecurityGroupIds:
+        - !Ref SecurityGroupID
+      IamInstanceProfile: !Ref IAMRole
+      UserData:
+        Fn::Base64: !FindInMap [UserDataMap, "DockerFile", UserData]
+      Tags:
+        - Key: Name
+          Value: !Ref DockerInstanceName
+
+  ## ---- Launch Template ---- ##
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${AWS::StackName}-launch-template
+      LaunchTemplateData:
+        ImageId: ami-051f8a213df8bc089
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyPair
+        SecurityGroupIds:
+          - !Ref ASGSecurityGroupID
+        UserData:
+          Fn::Base64: !FindInMap [UserDataMap, "WebServer", UserData]
+
+  ## ---- Auto Scaling group ---- ##
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref ASGSubnets
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 2
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName} - ASG"
+          PropagateAtLaunch: true
+
+  # ---- Application Load Balanncer ---- ##
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-ALB"
+      Subnets: !Ref ASGSubnets
+      SecurityGroups:
+        - !Ref ASGSecurityGroupID
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName} - ALB"
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-TargetGroup"
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      VpcId: !ImportValue VPC
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /index.html
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-TargetGroup"
